@@ -4,6 +4,7 @@ import {
   handleLogin,
   handleLogout,
   handleChangePassword,
+  handleInitSetup,
 } from '../middleware/auth';
 import { loadConfig, saveConfig, validateConfig, loadCacheMeta, loadCronMeta } from '../core/config';
 import {
@@ -30,6 +31,12 @@ const api = new Hono<HonoEnv>();
 api.post('/auth/login', handleLogin);
 api.post('/auth/logout', handleLogout);
 api.post('/auth/change-password', handleChangePassword);
+api.post('/auth/init-setup', handleInitSetup);
+
+api.get('/auth/setup-required', async (c) => {
+  const required = !(await import('../middleware/auth').then(m => m.hasAdminUser(c.env.DB)));
+  return c.json({ setup_required: required });
+});
 
 api.get('/auth/me', async (c) => {
   const user = c.get('user') as Record<string, unknown>;
