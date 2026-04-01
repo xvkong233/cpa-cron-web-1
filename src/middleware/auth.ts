@@ -111,9 +111,9 @@ function getJWTSecret(c: Context<HonoEnv>): string {
 export async function ensureAdminExists(
   db: D1Database,
   env?: HonoEnv['Bindings']
-): Promise<void> {
+): Promise<boolean> {
   const row = await db.prepare('SELECT COUNT(*) as cnt FROM admin_users').first<{ cnt: number }>();
-  if (row && row.cnt > 0) return;
+  if (row && row.cnt > 0) return true;
 
   const username = env?.ADMIN_USERNAME?.trim() || 'admin';
   const passwordHash = env?.ADMIN_PASSWORD_HASH?.trim();
@@ -124,13 +124,53 @@ export async function ensureAdminExists(
     hash = await hashPassword(password);
   }
   if (!hash) {
-    return;
+    return false;
   }
 
   await db
     .prepare('INSERT OR IGNORE INTO admin_users (username, password_hash) VALUES (?, ?)')
     .bind(username, hash)
     .run();
+  return true;
+}
+
+export async function hasAdminUser(db: D1Database): Promise<boolean> {
+  const row = await db.prepare('SELECT COUNT(*) as cnt FROM admin_users').first<{ cnt: number }>();
+  return !!(row && row.cnt > 0);
+}
+
+export async function createAdminUser(
+  db: D1Database,
+  username: string,
+  password: string
+): Promise<{ ok: boolean; error?: string }> {
+  // Check if any admin exists
+  const existing = await db.prepare('SELECT COUNT(*) as cnt FROM admin_users').first<{ cnt: number }>();
+  if (existing && existing.cnt > 0) {
+    return { ok: false, error: '管理员已存在' };
+  }
+
+  // Validate input
+  if (!username || username.length < 3) {
+    return { ok: false, error: '用户名至少 3 位' };
+  }
+  if (!password || password.length < 6) {
+    return { ok: false, error: '密码至少 6 位' };
+  }
+
+  const hash = await hashPassword(password);
+  try {
+    await db
+      .prepare('INSERT INTO admin_users (username, password_hash) VALUES (?, ?)')
+      .bind(username, hash)
+      .run();
+    return { ok: true };
+  } catch (e) {
+    if (String(e).includes('UNIQUE constraint')) {
+      return { ok: false, error: '用户名已存在' };
+    }
+    return { ok: false, error: '创建失败' };
+  }
 }
 
 export function authMiddleware() {
@@ -262,4 +302,67 @@ export async function handleChangePassword(c: Context<HonoEnv>): Promise<Respons
     .run();
 
   return c.json({ ok: true });
+}
+
+export async function handleInitSetup(c: Context<HonoEnv>): Promise<Response> {
+  // Check if any admin already exists
+  const existing = await c.env.DB.prepare('SELECT COUNT(*) as cnt FROM admin_users').first<{ cnt: number }>();
+  if (existing && existing.cnt > 0) {
+    return c.json({ error: '管理员已存在，请直接登录' }, 400);
+  }
+
+  const body = await c.req.json<{ username: string; password: string }>();
+  const { username, password } = body;
+
+  if (!username || !password) {
+    return c.json({ error: '请输入用户名和密码' }, 400);
+  }
+  if (username.length < 3) {
+    return c.json({ error: '用户名至少 3 位' }, 400);
+  }
+  if (password.length < 6) {
+    return c.json({ error: '密码至少 6 位' }, 400);
+  }
+
+  // Double-check no admin was created between the check above and now (race condition)
+  const recheck = await c.env.DB.prepare('SELECT COUNT(*) as cnt FROM admin_users').first<{ cnt: number }>();
+  if (recheck && recheck.cnt > 0) {
+    return c.json({ error: '管理员已存在，请刷新页面后登录' }, 400);
+  }
+
+  const hash = await hashPassword(password);
+  try {
+    await c.env.DB
+      .prepare('INSERT INTO admin_users (username, password_hash) VALUES (?, ?)')
+      .bind(username, hash)
+      .run();
+
+    // Log activity
+    await c.env.DB.prepare(
+      'INSERT INTO activity_log (action, detail, username) VALUES (?, ?, ?)'
+    )
+      .bind('init_setup', `初始化管理员账号：${username}`, username)
+      .run();
+
+    // Auto-login after setup
+    const secret = getJWTSecret(c);
+    const token = await createJWT({ sub: 1, username }, secret, 86400 * 7);
+
+    const isSecure = new URL(c.req.url).protocol === 'https:';
+    setCookie(c, 'cpa_session', token, {
+      httpOnly: false,
+      secure: isSecure,
+      sameSite: 'Lax',
+      maxAge: 86400 * 7,
+      path: '/',
+    });
+
+    return c.json({ ok: true, token, username });
+  } catch (e) {
+    if (String(e).includes('UNIQUE constraint')) {
+      return c.json({ error: '用户名已存在' }, 400);
+    }
+    console.error('Init setup error:', e);
+    return c.json({ error: '创建失败，请稍后重试' }, 500);
+  }
 }

@@ -1,9 +1,5 @@
-node_modules/
-dist/
-.wrangler/
-.dev.vars
-*.sqlite3
-*.sqlite3-journal
-*.log
-.DS_Store
-Thumbs.db
+```typescript
+// No build artifacts, dependency directories, or temporary files detected in changes
+// Only source code files (.ts) were modified
+// No additional .gitignore rules needed
+```

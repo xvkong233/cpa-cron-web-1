@@ -277,14 +277,19 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .btn-login:disabled { opacity: .5; cursor: not-allowed; }
 .error-msg { background: rgba(231,76,60,.1); border: 1px solid rgba(231,76,60,.3); color: var(--danger); padding: 10px 14px; border-radius: var(--radius); font-size: 13px; margin-bottom: 16px; display: none; }
 .footer { text-align: center; margin-top: 24px; font-size: 12px; color: var(--text-dim); }
+.init-form { display: none; }
+.init-form.show { display: block; }
+.login-form.hide { display: none; }
 </style>
 </head>
 <body>
 <div class="login-card">
   <h1>cpa-cron-web</h1>
-  <p>CPA 账号管理系统</p>
+  <p id="pageTitle">CPA 账号管理系统</p>
   <div class="error-msg" id="errorMsg"></div>
-  <form id="loginForm">
+  
+  <!-- Login Form -->
+  <form id="loginForm" class="login-form">
     <div class="form-group">
       <label>用户名</label>
       <input type="text" id="username" placeholder="请输入用户名" autocomplete="username" required>
@@ -295,9 +300,46 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     </div>
     <button type="submit" class="btn-login" id="loginBtn">登 录</button>
   </form>
-  <div class="footer">首次部署请通过环境变量设置管理员账号后再登录</div>
+  
+  <!-- Initial Setup Form -->
+  <form id="initForm" class="init-form">
+    <div class="form-group">
+      <label>设置管理员用户名</label>
+      <input type="text" id="initUsername" placeholder="至少 3 位" autocomplete="username" required>
+    </div>
+    <div class="form-group">
+      <label>设置管理员密码</label>
+      <input type="password" id="initPassword" placeholder="至少 6 位" autocomplete="new-password" required>
+    </div>
+    <div class="form-group">
+      <label>确认密码</label>
+      <input type="password" id="initPasswordConfirm" placeholder="再次输入密码" autocomplete="new-password" required>
+    </div>
+    <button type="submit" class="btn-login" id="initBtn">初始化并登录</button>
+  </form>
+  
+  <div class="footer" id="footerText">首次部署请通过环境变量设置管理员账号后再登录</div>
 </div>
 <script>
+let setupRequired = false;
+
+// Check if setup is required
+async function checkSetup() {
+  try {
+    const resp = await fetch('/api/auth/setup-required');
+    const data = await resp.json();
+    if (data.setup_required) {
+      setupRequired = true;
+      document.getElementById('loginForm').classList.add('hide');
+      document.getElementById('initForm').classList.add('show');
+      document.getElementById('pageTitle').textContent = '首次使用 - 初始化管理员';
+      document.getElementById('footerText').textContent = '请设置管理员账号和密码';
+    }
+  } catch (e) {
+    console.error('Failed to check setup:', e);
+  }
+}
+
 document.getElementById('loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const btn = document.getElementById('loginBtn');
@@ -329,6 +371,51 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
   btn.disabled = false;
   btn.textContent = '登 录';
 });
+
+document.getElementById('initForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById('initBtn');
+  const errEl = document.getElementById('errorMsg');
+  const pwd = document.getElementById('initPassword').value;
+  const pwdConfirm = document.getElementById('initPasswordConfirm').value;
+  
+  if (pwd !== pwdConfirm) {
+    errEl.textContent = '两次输入的密码不一致';
+    errEl.style.display = 'block';
+    return;
+  }
+  
+  btn.disabled = true;
+  btn.textContent = '初始化中...';
+  errEl.style.display = 'none';
+  
+  try {
+    const resp = await fetch('/api/auth/init-setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: document.getElementById('initUsername').value,
+        password: pwd,
+      }),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      localStorage.setItem('cpa_token', data.token);
+      window.location.href = '/';
+    } else {
+      errEl.textContent = data.error || '初始化失败';
+      errEl.style.display = 'block';
+    }
+  } catch (err) {
+    errEl.textContent = '网络错误';
+    errEl.style.display = 'block';
+  }
+  btn.disabled = false;
+  btn.textContent = '初始化并登录';
+});
+
+// Run on page load
+checkSetup();
 </script>
 </body>
 </html>`;
